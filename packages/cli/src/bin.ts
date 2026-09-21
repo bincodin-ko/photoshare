@@ -32,6 +32,7 @@ Options:
   --id <uuid>            Reuse a content identifier instead of generating one
   --no-samsung           Skip the Samsung SEF trailer (Google-only Motion Photo)
   --keep-meta-tracks     Keep Apple timed-metadata tracks in the embedded MP4
+  --drop-pcm-audio       Drop iPhone's uncompressed (lpcm) audio when making a Motion Photo
   --quality <1-100>      JPEG quality when a HEIC still must be transcoded (default 92)
   --json                 Machine-readable output for inspect
   -h, --help             Show this help
@@ -44,6 +45,7 @@ interface Opts {
   id?: string;
   samsung: boolean;
   keepMetaTracks: boolean;
+  dropPcmAudio: boolean;
   quality: number;
   json: boolean;
 }
@@ -59,6 +61,7 @@ async function main(argv: string[]): Promise<number> {
       id: { type: 'string' },
       'no-samsung': { type: 'boolean' },
       'keep-meta-tracks': { type: 'boolean' },
+      'drop-pcm-audio': { type: 'boolean' },
       quality: { type: 'string' },
       json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
@@ -76,6 +79,7 @@ async function main(argv: string[]): Promise<number> {
     id: values.id,
     samsung: !values['no-samsung'],
     keepMetaTracks: !!values['keep-meta-tracks'],
+    dropPcmAudio: !!values['drop-pcm-audio'],
     quality: values.quality ? Number(values.quality) : 92,
     json: !!values.json,
   };
@@ -186,6 +190,7 @@ async function writeMotion(stillPath: string, videoPath: string, opts: Opts, exp
     transcodeHeic: nodeHeicTranscoder(opts.quality),
     presentationTimestampUs: opts.ts,
     keepMetadataTracks: opts.keepMetaTracks,
+    dropPcmAudio: opts.dropPcmAudio,
     samsungTrailer: opts.samsung,
   });
   const target = explicitOut ?? join(await outDir(opts, dirname(resolve(stillPath))), stem(stillPath) + '.jpg');

@@ -45,6 +45,8 @@ export interface LiveToMotionOptions {
   presentationTimestampUs?: number;
   /** Keep Apple's timed-metadata tracks in the embedded MP4. Default false. */
   keepMetadataTracks?: boolean;
+  /** Drop uncompressed (lpcm) audio that some Android players cannot play. Default false. */
+  dropPcmAudio?: boolean;
   /** Write Samsung SEF trailer. Default true. */
   samsungTrailer?: boolean;
 }
@@ -82,7 +84,7 @@ export async function liveToMotion(still: Uint8Array, video: Uint8Array, opts: L
   }
 
   const ts = Math.round(opts.presentationTimestampUs ?? (vinfo.stillImageTimeSec ?? 0) * 1e6);
-  const mp4 = makeMotionPhotoVideo(video, { stripMetadataTracks: !opts.keepMetadataTracks });
+  const mp4 = makeMotionPhotoVideo(video, { stripMetadataTracks: !opts.keepMetadataTracks, dropPcmAudio: opts.dropPcmAudio });
   const file = buildMotionPhoto({ still: jpeg, video: mp4, presentationTimestampUs: ts, samsungTrailer: opts.samsungTrailer });
   return { file, presentationTimestampUs: ts, contentIdentifier: stillInfo.contentIdentifier ?? vinfo.contentIdentifier, transcoded, pairedByIdentifier };
 }

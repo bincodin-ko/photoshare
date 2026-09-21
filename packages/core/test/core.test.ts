@@ -72,14 +72,21 @@ describe('Motion Photo build/parse', () => {
     expect(parsed.imageUtcMs).toBe(1_790_000_000_000);
     expect(parsed.xmp?.motionPhoto).toBe(1);
     expect(parsed.xmp?.items.map((i) => i.semantic)).toEqual(['Primary', 'MotionPhoto']);
-    expect(parsed.xmp?.items[1].length).toBe(video.byteLength);
-    expect(parsed.xmp?.items[0].padding).toBe(8 + 'MotionPhoto_Data'.length);
+    // Google's reader walks back from EOF by the video item's Length: it must land on 'ftyp'.
+    const vStart = motion.byteLength - parsed.xmp!.items[1].length!;
+    expect(String.fromCharCode(...motion.subarray(vStart + 4, vStart + 8))).toBe('ftyp');
+    // The primary item's Padding walks forward from its EOI to the same place.
+    const eoiEnd = parseJpeg(motion).eoiEnd;
+    expect(eoiEnd + parsed.xmp!.items[0].padding!).toBe(vStart);
+    expect(parsed.xmp!.items[0].length).toBe(eoiEnd);
+    expect(parsed.xmp!.items[1].padding).toBe(motion.byteLength - vStart - video.byteLength);
     // MicroVideoOffset counts from end of file to the MP4 start.
     const start = motion.byteLength - parsed.xmp!.microVideoOffset!;
     expect(String.fromCharCode(...motion.subarray(start + 4, start + 8))).toBe('ftyp');
 
     const sef = parseSefTrailer(motion)!;
-    expect(sef.blocks.map((b) => b.name)).toEqual(['MotionPhoto_Data', 'Image_UTC_Data']);
+    expect(sef.blocks.map((b) => b.name)).toEqual(['Image_UTC_Data', 'MotionPhoto_Data']);
+    expect(sef.version).toBe(107);
 
     // The clean still has no trailer and no motion hints.
     const cleanParsed = parseJpeg(parsed.still);
@@ -121,8 +128,11 @@ describe('Motion Photo build/parse', () => {
     expect(embedded.startsWith('base64:')).toBe(true);
     expect(Buffer.from(embedded.slice(7), 'base64').byteLength).toBe(video.byteLength);
     expect(String(j['Samsung:TimeStamp'])).toMatch(/^2026:09:21 14:13:20/);
-    const gv = j['Google:MotionPhotoVideo'] as string;
-    expect(Buffer.from(gv.slice(7), 'base64').byteLength).toBe(video.byteLength);
+    // exiftool's Google-trailer reader extracts by the declared Length, which (as in
+    // Samsung's own files) spans the MP4 plus the trailing SEF directory.
+    const gv = Buffer.from((j['Google:MotionPhotoVideo'] as string).slice(7), 'base64');
+    expect(gv.subarray(0, video.byteLength)).toEqual(Buffer.from(video));
+    expect(gv.byteLength).toBe(video.byteLength + parseMotionPhoto(motion)!.xmp!.items[1].padding!);
     expect((j['XMP-GContainer:DirectoryItemSemantic'] as string[]) ?? j['XMP-Container:DirectoryItemSemantic']).toContain('MotionPhoto');
   });
 });
@@ -140,6 +150,11 @@ describe('Live Photo build/parse', () => {
     expect(info.stillImageTimeSec).toBeCloseTo(0.5, 2);
     expect(info.tracks.map((t) => t.handler).sort()).toEqual(['meta', 'soun', 'vide']);
     expect(info.durationSec).toBeCloseTo(readMovieInfo(video).durationSec, 3);
+    const meta = info.tracks.find((t) => t.handler === 'meta')!;
+    expect(meta.timescale).toBe(info.timescale);
+    expect(meta.durationSec).toBeCloseTo(1 / info.timescale, 6); // one tick, like iPhone files
+    expect(info.keys['com.apple.quicktime.creationdate']).toBe('2026-09-20T10:11:12+0900');
+    expect(info.keys['com.apple.quicktime.make']).toBe('samsung');
     expect(inspect(live.still).kind).toBe('live-photo-still');
     expect(inspect(live.video).kind).toBe('live-photo-video');
   });
@@ -163,8 +178,10 @@ describe('Live Photo build/parse', () => {
     const jv = exiftoolJson(tmpFile('live.mov', live.video), ['-ee']);
     expect(jv['Keys:ContentIdentifier']).toBe(live.contentIdentifier);
     expect(jv['QuickTime:MajorBrand']).toBe('qt  ');
-    expect(jv['Track3:HandlerType']).toBe('meta');
+    expect(jv['Track3:HandlerDescription']).toMatch(/Core Media/);
     expect(jv['Track3:ContentDescribes']).toBe(1);
+    expect(jv['Track3:MetaFormat']).toBe('mebx');
+    expect(jv['Keys:CreationDate']).toBeDefined();
     const keys = Object.keys(jv).join(' ');
     expect(keys).toMatch(/StillImageTime/);
   });

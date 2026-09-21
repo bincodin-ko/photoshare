@@ -56,14 +56,22 @@ node packages/cli/dist/bin.js extract  모션.jpg                        # 정�
 
 ## 검증
 
-`pnpm test`는 우리가 만든 파일을 **exiftool**로 다시 읽어 삼성 트레일러, Google XMP, Apple MakerNote, QuickTime Keys,
-still-image-time 트랙이 모두 인식되는지 확인하고, **ffmpeg**로 변환된 영상이 끝까지 디코드되는지 확인합니다.
-실제 기기(iOS 사진 앱, 삼성 갤러리, Google 포토)에서의 최종 확인은 아직 자동화되어 있지 않으니, 문제가 있는 샘플은
-이슈로 올려 주세요.
+세 겹으로 확인합니다.
+
+1. **실제 기기 파일과 대조** — 공개된 실제 촬영본(iPhone 6s 라이브포토 쌍, iPhone 7 HEIC, Galaxy One UI 5/6 JPG·HEIC 모션포토,
+   Galaxy S20, Pixel 4 XL / 7 Pro)을 `scripts/fetch-samples.sh`로 받아 `pnpm test`가 함께 돌립니다. 우리가 만드는 still-image-time
+   트랙은 실제 iPhone MOV와 박스 단위로 동일하고, 모션포토의 XMP 길이 규칙은 Galaxy One UI 6 파일과 Google 공식 파서(media3)의
+   계산 방식(파일 끝에서 역방향)을 따릅니다.
+2. **exiftool 교차 검증** — 삼성 트레일러, Google XMP, Apple MakerNote, QuickTime Keys, still-image-time 트랙이 모두 인식되는지 확인.
+3. **ffmpeg 디코드** — 변환된 MOV/MP4/모션포토가 끝까지 디코드되는지 확인.
+
+실기기 최종 확인(iOS 사진 앱, 삼성 갤러리, Google 포토)은 [docs/DEVICE-TEST.md](docs/DEVICE-TEST.md)의 체크리스트로 진행합니다.
+실패하는 샘플은 이슈로 올려 주세요.
 
 ## 알려진 한계 (v0.1)
 
-- 아이폰 → 갤럭시 방향은 JPEG 모션포토만 만듭니다(HEIC 모션포토 쓰기는 로드맵).
+- 아이폰 → 갤럭시 방향은 JPEG 모션포토만 만듭니다. HEIC 모션포토(Galaxy One UI 6 방식: `mpvd` + `sefd`) 읽기는 되고 쓰기는 로드맵입니다.
+- iPhone 라이브포토의 오디오는 무압축 `lpcm`입니다. 안드로이드 플레이어가 재생하지 못하는 경우 `--drop-pcm-audio`로 제거할 수 있습니다.
 - 조각난(fragmented) MP4는 지원하지 않습니다. 폰 카메라 출력은 해당되지 않습니다.
 - iOS에 직접 저장하는 앱은 아직 없습니다. 위 "넣는 방법"의 경로를 사용하세요.
 
@@ -73,7 +81,8 @@ still-image-time 트랙이 모두 인식되는지 확인하고, **ffmpeg**로 �
 packages/core   @photoshare/core  — JPEG/Exif/XMP/SEF/ISOBMFF 파서·라이터, 변환 로직 (의존성 없음)
 packages/cli    @photoshare/cli   — photoshare 명령
 apps/web        @photoshare/web   — Vite 정적 웹 앱 (GitHub Pages 배포 워크플로 포함)
-docs/           포맷 노트
+docs/           포맷 노트, 실기기 테스트 체크리스트
+scripts/        실제 기기 샘플 다운로드 스크립트
 ```
 
 MIT License.

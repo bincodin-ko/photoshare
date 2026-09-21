@@ -236,9 +236,24 @@ function ilstBox(values: Uint8Array[]): Uint8Array {
   return box('ilst', ...items);
 }
 
-function hdlrBox(handler: string, name: string, componentType = ''): Uint8Array {
+/**
+ * QuickTime-style handler box, byte-compatible with what iPhones write:
+ * component type ('mhlr'/'dhlr' or 0), handler, manufacturer 'appl', component
+ * flags, flags mask, then the name as a Pascal string (length-prefixed).
+ */
+function hdlrBox(handler: string, name: string, componentType = '', manufacturer = '', flags = 0): Uint8Array {
   const w = new ByteWriter(64);
-  w.str(componentType.padEnd(4, '\0').slice(0, 4)).str(handler).zeros(12).bytes(utf8(name)).u8(0);
+  w.str(componentType.padEnd(4, '\0').slice(0, 4))
+    .str(handler)
+    .str(manufacturer.padEnd(4, '\0').slice(0, 4))
+    .u32(flags)
+    .u32(0);
+  if (name) {
+    const nb = utf8(name);
+    w.u8(Math.min(255, nb.byteLength)).bytes(nb);
+  } else {
+    w.u8(0);
+  }
   return fullBox('hdlr', 0, 0, w.toUint8Array());
 }
 
@@ -260,16 +275,15 @@ const IDENTITY_MATRIX = new Uint8Array([
 interface StillTrackParams {
   trackId: number;
   videoTrackId: number;
-  movieTimescale: number;
+  /** Movie timescale; the metadata track uses the same timescale, like iPhone recordings. */
+  timescale: number;
   /** Still time in movie timescale units. */
-  stillMovieTicks: number;
-  /** Remaining duration after the still, in movie ticks (>= 1). */
-  sampleMovieTicks: number;
-  mediaTimescale: number;
+  stillTicks: number;
   /** Absolute file offset where the 9-byte sample will live. */
   sampleOffset: number;
 }
 
+/** One sample: [u32 size=9][u32 local key id=1][int8 -1] — identical to iPhone files. */
 const STILL_SAMPLE = (() => {
   const w = new ByteWriter(9);
   w.u32(9).u32(1).i8(-1);
@@ -278,50 +292,67 @@ const STILL_SAMPLE = (() => {
 
 export const STILL_SAMPLE_SIZE = STILL_SAMPLE.byteLength;
 
+/**
+ * The still-image-time track exactly as iPhones write it (verified against a
+ * real Live Photo .MOV): one 1-tick sample, placed at the still time through
+ * an empty edit in the edit list, tkhd flags 0xF, 'gmhd' base media header,
+ * 'alis' data reference, tref/cdsc to the video track.
+ */
 function stillImageTimeTrack(p: StillTrackParams): Uint8Array {
-  const mediaDur = Math.max(1, Math.round((p.sampleMovieTicks / p.movieTimescale) * p.mediaTimescale));
-  const trackDur = p.stillMovieTicks + p.sampleMovieTicks;
+  const sampleDur = 1;
+  const trackDur = p.stillTicks + sampleDur;
+  // QuickTime timestamps count seconds since 1904-01-01 UTC.
+  const now = Math.floor(Date.now() / 1000) + 2082844800;
 
   const tkhd = (() => {
     const w = new ByteWriter(84);
-    w.u32(0).u32(0).u32(p.trackId).u32(0).u32(trackDur).zeros(8).u16(0).u16(0).u16(0).u16(0).bytes(IDENTITY_MATRIX).u32(0).u32(0);
-    return fullBox('tkhd', 0, 0x000001, w.toUint8Array());
+    w.u32(now).u32(now).u32(p.trackId).u32(0).u32(trackDur).zeros(8).u16(0).u16(0).u16(0).u16(0).bytes(IDENTITY_MATRIX).u32(0).u32(0);
+    return fullBox('tkhd', 0, 0x00000f, w.toUint8Array());
   })();
-
-  const tref = box('tref', box('cdsc', be32(p.videoTrackId)));
 
   const edts = (() => {
     const w = new ByteWriter(32);
     const entries: [number, number][] = [];
-    if (p.stillMovieTicks > 0) entries.push([p.stillMovieTicks, -1]);
-    entries.push([p.sampleMovieTicks, 0]);
+    if (p.stillTicks > 0) entries.push([p.stillTicks, -1]);
+    entries.push([sampleDur, 0]);
     w.u32(entries.length);
     for (const [dur, mt] of entries) w.u32(dur).i32(mt).u16(1).u16(0);
     return box('edts', fullBox('elst', 0, 0, w.toUint8Array()));
   })();
 
+  const tref = box('tref', box('cdsc', be32(p.videoTrackId)));
+
   const mdhd = (() => {
     const w = new ByteWriter(20);
-    w.u32(0).u32(0).u32(p.mediaTimescale).u32(mediaDur).u16(0x55c4).u16(0);
+    w.u32(now).u32(now).u32(p.timescale).u32(sampleDur).u16(0x55c4).u16(0);
     return fullBox('mdhd', 0, 0, w.toUint8Array());
   })();
 
-  const hdlr = hdlrBox('meta', 'Core Media Metadata', 'mhlr');
+  const hdlr = hdlrBox('meta', 'Core Media Metadata', 'mhlr', 'appl', 1);
+
+  // Base media information header (QuickTime 'gmhd' > 'gmin'), as in Apple files.
+  const gmin = (() => {
+    const w = new ByteWriter(12);
+    w.u16(0x40).u16(0x8000).u16(0x8000).u16(0x8000).u16(0).u16(0);
+    return fullBox('gmin', 0, 0, w.toUint8Array());
+  })();
+  const gmhd = box('gmhd', gmin);
+  const dataHdlr = hdlrBox('alis', 'Core Media Data Handler', 'dhlr', 'appl', 0);
+  const dinf = box('dinf', fullBox('dref', 0, 0, be32(1), fullBox('alis', 0, 1)));
 
   const keyd = box('keyd', ascii('mdta'), utf8(KEY_STILL_IMAGE_TIME));
-  const dtyp = box('dtyp', be32(0), be32(65)); // namespace 0, type 65 = signed 8-bit integer
+  const dtyp = box('dtyp', be32(0), be32(65)); // namespace 0 (well-known), type 65 = signed 8-bit integer
   const keyEntry = concat([be32(8 + keyd.byteLength + dtyp.byteLength), be32(1), keyd, dtyp]);
   const mebx = box('mebx', new Uint8Array(6), new ByteWriter(2).u16(1).toUint8Array(), box('keys', keyEntry));
   const stsd = fullBox('stsd', 0, 0, be32(1), mebx);
-  const stts = fullBox('stts', 0, 0, be32(1), be32(1), be32(mediaDur));
+  const stts = fullBox('stts', 0, 0, be32(1), be32(1), be32(sampleDur));
   const stsc = fullBox('stsc', 0, 0, be32(1), be32(1), be32(1), be32(1));
   const stsz = fullBox('stsz', 0, 0, be32(STILL_SAMPLE_SIZE), be32(1));
   const stco = fullBox('stco', 0, 0, be32(1), be32(p.sampleOffset));
   const stbl = box('stbl', stsd, stts, stsc, stsz, stco);
-  const dinf = box('dinf', fullBox('dref', 0, 0, be32(1), fullBox('url ', 0, 1)));
-  const minf = box('minf', fullBox('nmhd', 0, 0), dinf, stbl);
+  const minf = box('minf', gmhd, dataHdlr, dinf, stbl);
   const mdia = box('mdia', mdhd, hdlr, minf);
-  return box('trak', tkhd, tref, edts, mdia);
+  return box('trak', tkhd, edts, tref, mdia);
 }
 
 // ---------------------------------------------------------------------------
@@ -426,27 +457,40 @@ function patchMvhd(file: Uint8Array, mvhd: Box, nextTrackId: number, duration?: 
 
 export interface LivePhotoVideoOptions {
   contentIdentifier: string;
-  /** Time of the still frame within the video, in seconds. Defaults to the middle? No: 0. */
+  /** Time of the still frame within the video, in seconds. Default 0. */
   stillTimeSec?: number;
   /** Extra mdta keys to write (e.g. com.apple.quicktime.creationdate). */
   extraKeys?: Record<string, string>;
+  /**
+   * Keep only one video track (the largest) plus audio. Motion photos from
+   * Pixels can carry a second low-resolution video track and vendor metadata
+   * tracks that Photos has no use for. Default true.
+   */
+  pruneTracks?: boolean;
+}
+
+const PCM_FORMATS = new Set(['lpcm', 'sowt', 'twos', 'raw ', 'in24', 'in32', 'fl32', 'fl64', 'alaw', 'ulaw', 'NONE']);
+
+function trackKeys(trak: Box, buf: Uint8Array): string[] {
+  return stsdEntries(path(trak, 'mdia', 'minf', 'stbl', 'stsd'), buf)
+    .filter((e) => e.type === 'mebx')
+    .flatMap((e) => mebxKeys(e, buf));
 }
 
 /**
  * Turn an ordinary MP4 (Samsung/Google motion video) into a Live Photo video:
  * QuickTime brand, content identifier key, still-image-time track.
- * Existing metadata tracks with a still-image-time key are dropped first so
- * re-running is idempotent.
+ * Existing still-image-time tracks are dropped first so re-running is idempotent.
  */
 export function makeLivePhotoVideo(input: Uint8Array, opts: LivePhotoVideoOptions): Uint8Array {
   const info = readMovieInfo(input);
   if (info.fragmented) throw new FormatError('Fragmented MP4 is not supported');
-  const video = info.tracks.find((t) => t.handler === 'vide');
-  if (!video) throw new FormatError('MP4/MOV: no video track');
+  const videos = info.tracks.filter((t) => t.handler === 'vide');
+  if (!videos.length) throw new FormatError('MP4/MOV: no video track');
+  const primary = videos.reduce((a, b) => ((b.width ?? 0) * (b.height ?? 0) > (a.width ?? 0) * (a.height ?? 0) ? b : a));
+  const prune = opts.pruneTracks ?? true;
   const stillSec = Math.min(Math.max(0, opts.stillTimeSec ?? 0), Math.max(0, info.durationSec));
   const stillTicks = Math.round(stillSec * info.timescale);
-  const totalTicks = Math.round(info.durationSec * info.timescale);
-  const sampleTicks = Math.max(1, totalTicks - stillTicks);
 
   const ftyp = ftypBox('qt  ', 0, ['qt  ']);
   const { file } = relayout(
@@ -454,14 +498,19 @@ export function makeLivePhotoVideo(input: Uint8Array, opts: LivePhotoVideoOption
     ftyp,
     ({ shift, extraOffset, original }) => {
       const parts: Uint8Array[] = [];
-      let newTrackId = info.nextTrackId;
+      const newTrackId = info.nextTrackId;
       for (const c of original.children ?? []) {
         if (c.type === 'mvhd') {
           parts.push(patchMvhd(input, c, newTrackId + 1));
         } else if (c.type === 'trak') {
-          const isStillTrack = path(c, 'mdia', 'hdlr') && handlerType(path(c, 'mdia', 'hdlr')) === 'meta' &&
-            stsdEntries(path(c, 'mdia', 'minf', 'stbl', 'stsd'), input).some((e) => e.type === 'mebx' && mebxKeys(e, input).some((k) => k.endsWith('still-image-time')));
-          if (isStillTrack) continue;
+          const tkhd = child(c, 'tkhd');
+          const id = tkhd ? tkhdInfo(tkhd).id : -1;
+          const handler = handlerType(path(c, 'mdia', 'hdlr'));
+          if (handler === 'meta' && trackKeys(c, input).some((k) => k.endsWith('still-image-time'))) continue;
+          if (prune) {
+            if (handler === 'vide' && id !== primary.id) continue;
+            if (handler !== 'vide' && handler !== 'soun') continue;
+          }
           parts.push(patchTrakOffsets(input, c, shift));
         } else if (c.type === 'meta' && handlerType(child(c, 'hdlr')) === 'mdta') {
           continue; // rebuilt below
@@ -479,11 +528,9 @@ export function makeLivePhotoVideo(input: Uint8Array, opts: LivePhotoVideoOption
       parts.push(
         stillImageTimeTrack({
           trackId: newTrackId,
-          videoTrackId: video.id,
-          movieTimescale: info.timescale,
-          stillMovieTicks: stillTicks,
-          sampleMovieTicks: sampleTicks,
-          mediaTimescale: video.timescale || info.timescale,
+          videoTrackId: primary.id,
+          timescale: info.timescale,
+          stillTicks,
           sampleOffset: extraOffset,
         }),
       );
@@ -495,8 +542,14 @@ export function makeLivePhotoVideo(input: Uint8Array, opts: LivePhotoVideoOption
 }
 
 export interface MotionVideoOptions {
-  /** Drop Apple timed-metadata tracks (still-image-time, etc). Default true. */
+  /** Drop Apple timed-metadata tracks (still-image-time, live-photo-info). Default true. */
   stripMetadataTracks?: boolean;
+  /**
+   * Drop uncompressed (PCM) audio tracks. iPhones record Live Photo audio as
+   * 'lpcm', which some Android players cannot decode. Default false: keep the
+   * audio and let the gallery decide.
+   */
+  dropPcmAudio?: boolean;
 }
 
 /**
@@ -513,6 +566,10 @@ export function makeMotionPhotoVideo(input: Uint8Array, opts: MotionVideoOptions
       if (c.type === 'trak') {
         const h = handlerType(path(c, 'mdia', 'hdlr'));
         if (strip && (h === 'meta' || h === 'tmcd')) continue;
+        if (opts.dropPcmAudio && h === 'soun') {
+          const fmt = stsdEntries(path(c, 'mdia', 'minf', 'stbl', 'stsd'), input)[0]?.type ?? '';
+          if (PCM_FORMATS.has(fmt)) continue;
+        }
         parts.push(patchTrakOffsets(input, c, shift));
       } else {
         parts.push(rawBox(input, c));

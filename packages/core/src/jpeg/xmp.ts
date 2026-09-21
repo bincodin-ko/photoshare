@@ -86,12 +86,14 @@ export function isMotionPhotoXmp(x: MotionPhotoXmp): boolean {
 export interface MotionPhotoXmpParams {
   /** Byte length of the embedded MP4. */
   videoLength: number;
-  /** Bytes between the primary image's EOI and the first byte of the MP4 (e.g. Samsung SEF block header). */
+  /** Bytes between the primary image's EOI and the first byte of the MP4 (e.g. Samsung SEF block headers). */
   paddingBeforeVideo: number;
   /** Bytes after the MP4 up to end of file (e.g. Samsung SEF directory). */
   bytesAfterVideo: number;
   presentationTimestampUs: number;
   primaryMime?: string;
+  /** Length of the primary image in bytes (optional per spec; Samsung writes it). 0 = unknown. */
+  primaryLength?: number;
 }
 
 const MOTION_ATTR_RE = /\s+GCamera:(?:MotionPhoto|MotionPhotoVersion|MotionPhotoPresentationTimestampUs|MicroVideo|MicroVideoVersion|MicroVideoOffset|MicroVideoPresentationTimestampUs)\s*=\s*(?:"[^"]*"|'[^']*')/g;
@@ -108,17 +110,25 @@ export function stripMotionPhotoXmp(xml: string): string {
     .replace(CONTAINER_DIR_ATTR_RE, '');
 }
 
+/**
+ * Lengths follow what Google's reader (media3 MotionPhotoDescription) and
+ * Samsung's own files do: readers walk *backwards from the end of the file*,
+ * so the MotionPhoto item's Length must cover the MP4 plus anything after it
+ * (Samsung's SEF directory). The video item's Padding records that tail, and
+ * the primary item's Padding is the gap between its EOI and the MP4.
+ */
 function motionDescription(p: MotionPhotoXmpParams): string {
   const ts = Math.max(0, Math.round(p.presentationTimestampUs));
-  const microOffset = p.videoLength + p.bytesAfterVideo;
+  const videoItemLength = p.videoLength + p.bytesAfterVideo;
+  const microOffset = videoItemLength;
   return (
     `<rdf:Description rdf:about=""` +
     ` xmlns:GCamera="${NS.GCamera}" xmlns:Container="${NS.Container}" xmlns:Item="${NS.Item}"` +
     ` GCamera:MotionPhoto="1" GCamera:MotionPhotoVersion="1" GCamera:MotionPhotoPresentationTimestampUs="${ts}"` +
     ` GCamera:MicroVideo="1" GCamera:MicroVideoVersion="1" GCamera:MicroVideoOffset="${microOffset}" GCamera:MicroVideoPresentationTimestampUs="${ts}">` +
     `<Container:Directory><rdf:Seq>` +
-    `<rdf:li rdf:parseType="Resource"><Container:Item Item:Mime="${p.primaryMime ?? 'image/jpeg'}" Item:Semantic="Primary" Item:Length="0" Item:Padding="${p.paddingBeforeVideo}"/></rdf:li>` +
-    `<rdf:li rdf:parseType="Resource"><Container:Item Item:Mime="video/mp4" Item:Semantic="MotionPhoto" Item:Length="${p.videoLength}" Item:Padding="0"/></rdf:li>` +
+    `<rdf:li rdf:parseType="Resource"><Container:Item Item:Mime="${p.primaryMime ?? 'image/jpeg'}" Item:Semantic="Primary" Item:Length="${p.primaryLength ?? 0}" Item:Padding="${p.paddingBeforeVideo}"/></rdf:li>` +
+    `<rdf:li rdf:parseType="Resource"><Container:Item Item:Mime="video/mp4" Item:Semantic="MotionPhoto" Item:Length="${videoItemLength}" Item:Padding="${p.bytesAfterVideo}"/></rdf:li>` +
     `</rdf:Seq></Container:Directory>` +
     `</rdf:Description>`
   );

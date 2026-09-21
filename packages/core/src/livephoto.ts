@@ -108,6 +108,27 @@ export interface LivePhoto {
 export function buildLivePhoto(opts: BuildLivePhotoOptions): LivePhoto {
   const id = opts.contentIdentifier ?? newContentIdentifier();
   const still = stampStill(opts.still, id);
-  const video = makeLivePhotoVideo(opts.video, { contentIdentifier: id, stillTimeSec: opts.stillTimeSec });
+  const extraKeys = appleKeysFromExif(readLivePhotoStill(opts.still)?.exif);
+  const video = makeLivePhotoVideo(opts.video, { contentIdentifier: id, stillTimeSec: opts.stillTimeSec, extraKeys });
   return { still, video, contentIdentifier: id, stillContainer: isJpeg(opts.still) ? 'jpeg' : 'heif' };
+}
+
+/**
+ * iPhones also stamp the .MOV with creation date, make, model and software
+ * (moov/meta keys). Photos uses them to date and label the asset, so we copy
+ * them from the still's Exif when available.
+ */
+export function appleKeysFromExif(exif?: ExifSummary): Record<string, string> {
+  const keys: Record<string, string> = {};
+  if (!exif) return keys;
+  const m = exif.dateTimeOriginal && /^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(exif.dateTimeOriginal);
+  if (m) {
+    const [, Y, M, D, h, mi, s] = m;
+    const off = exif.offsetTimeOriginal && /^([+-])(\d{2}):(\d{2})/.exec(exif.offsetTimeOriginal);
+    keys['com.apple.quicktime.creationdate'] = `${Y}-${M}-${D}T${h}:${mi}:${s}` + (off ? `${off[1]}${off[2]}${off[3]}` : '');
+  }
+  if (exif.make) keys['com.apple.quicktime.make'] = exif.make;
+  if (exif.model) keys['com.apple.quicktime.model'] = exif.model;
+  if (exif.software) keys['com.apple.quicktime.software'] = exif.software;
+  return keys;
 }

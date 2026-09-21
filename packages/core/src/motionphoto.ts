@@ -4,7 +4,7 @@ import { findHeifMotionVideo, heifStillOnly, indexOfFtyp, mp4Extent, readHeifExi
 import { ExifSummary, exifDateToEpochMs, parseTiff, summarizeExif } from './jpeg/exif.js';
 import { EXIF_HEADER, findExifSegment, findXmpSegment, isJpeg, parseJpeg, rebuildJpeg, upsertApp1, XMP_HEADER } from './jpeg/segments.js';
 import { MotionPhotoXmp, buildMotionPhotoXmp, isMotionPhotoXmp, parseMotionPhotoXmp, stripMotionPhotoXmp, xmpFromApp1, xmpToApp1 } from './jpeg/xmp.js';
-import { SefTrailer, buildSefTrailer, parseSefTrailer, sefBlockHeaderSize, sefImageUtcBlock, sefMotionPhotoBlock } from './samsung/sef.js';
+import { SefTrailer, buildSefTrailer, encodeSefBlock, parseSefTrailer, sefBlockHeaderSize, sefImageUtcBlock, sefMotionPhotoBlock } from './samsung/sef.js';
 import { readMovieInfo } from './isobmff/quicktime.js';
 
 /**
@@ -99,22 +99,30 @@ function parseJpegMotionPhoto(file: Uint8Array): MotionPhoto | undefined {
     }
   }
 
-  // 2. Google container directory: items laid out after the primary image.
-  if (!video && xmp && xmp.items.length) {
-    let pos = parsed.eoiEnd + (xmp.items[0]?.padding ?? 0);
-    for (const item of xmp.items.slice(1)) {
-      if (item.semantic === 'MotionPhoto' && item.length) {
-        let start = pos;
-        if (indexOfFtyp(file.subarray(start, start + 16)) !== 0) {
-          const i = indexOfFtyp(file, start);
-          if (i < 0) break;
-          start = i;
-        }
-        video = sliceVideoAt(file, start, item.length);
-        source = 'xmp-container';
+  // 2. Google container directory. Google's reader (media3) walks backwards from
+  //    the end of the file using each secondary item's Length; Samsung inflates
+  //    the video Length to cover its trailing SEF directory, so we do the same walk.
+  if (!video && xmp && xmp.items.length > 1) {
+    let start = -1;
+    let itemStart = file.byteLength;
+    for (let i = xmp.items.length - 1; i >= 1; i--) {
+      const item = xmp.items[i];
+      const itemEnd = itemStart;
+      itemStart -= item.length ?? 0;
+      if (item.semantic === 'MotionPhoto' && (item.mime === 'video/mp4' || item.mime === 'video/quicktime') && itemStart < itemEnd) {
+        start = itemStart;
         break;
       }
-      pos += (item.length ?? 0) + (item.padding ?? 0);
+    }
+    // Forward walk (EOI + primary padding) as a second opinion when the backward one misses.
+    if (start < 0 || start < parsed.eoiEnd || indexOfFtyp(file.subarray(start, start + 16)) !== 0) {
+      const fwd = parsed.eoiEnd + (xmp.items[0]?.padding ?? 0);
+      if (indexOfFtyp(file.subarray(fwd, fwd + 16)) === 0) start = fwd;
+      else start = indexOfFtyp(file, parsed.eoiEnd);
+    }
+    if (start >= 0) {
+      video = sliceVideoAt(file, start);
+      source = 'xmp-container';
     }
   }
 
@@ -199,11 +207,15 @@ export function buildMotionPhoto(opts: BuildMotionPhotoOptions): Uint8Array {
   }
   if (utcMs === undefined) utcMs = Date.now();
 
+  // Same block order as Samsung One UI 6 files: small blocks first, the video last,
+  // then the SEFH directory. The primary item's XMP Padding covers the small blocks
+  // plus the video block header; the video item's Length covers MP4 + directory.
   let trailer: Uint8Array;
   let paddingBeforeVideo: number;
   if (samsung) {
-    trailer = buildSefTrailer([sefMotionPhotoBlock(video), sefImageUtcBlock(utcMs)]);
-    paddingBeforeVideo = sefBlockHeaderSize('MotionPhoto_Data');
+    const utc = sefImageUtcBlock(utcMs);
+    trailer = buildSefTrailer([utc, sefMotionPhotoBlock(video)], 107);
+    paddingBeforeVideo = encodeSefBlock(utc).byteLength + sefBlockHeaderSize('MotionPhoto_Data');
   } else {
     trailer = video;
     paddingBeforeVideo = 0;
@@ -211,10 +223,19 @@ export function buildMotionPhoto(opts: BuildMotionPhotoOptions): Uint8Array {
   const bytesAfterVideo = trailer.byteLength - paddingBeforeVideo - video.byteLength;
 
   const xmpSeg = findXmpSegment(parsed);
-  const xmp = buildMotionPhotoXmp(
-    { videoLength: video.byteLength, paddingBeforeVideo, bytesAfterVideo, presentationTimestampUs: ts },
-    xmpSeg ? xmpFromApp1(xmpSeg.data) : undefined,
-  );
-  const segments = upsertApp1(parsed.segments, XMP_HEADER, xmpToApp1(xmp));
-  return concat([rebuildJpeg(opts.still, parsed, segments), trailer]);
+  const existingXmp = xmpSeg ? xmpFromApp1(xmpSeg.data) : undefined;
+  const params = { videoLength: video.byteLength, paddingBeforeVideo, bytesAfterVideo, presentationTimestampUs: ts };
+  // The primary Length is the JPEG's own size, which depends on the XMP that states it:
+  // iterate until the number is stable (the digit count changes at most once).
+  let primaryLength = 0;
+  let jpeg = rebuildJpeg(opts.still, parsed, upsertApp1(parsed.segments, XMP_HEADER, xmpToApp1(buildMotionPhotoXmp({ ...params, primaryLength }, existingXmp))));
+  for (let i = 0; i < 3 && jpeg.byteLength !== primaryLength; i++) {
+    primaryLength = jpeg.byteLength;
+    jpeg = rebuildJpeg(opts.still, parsed, upsertApp1(parsed.segments, XMP_HEADER, xmpToApp1(buildMotionPhotoXmp({ ...params, primaryLength }, existingXmp))));
+  }
+  if (jpeg.byteLength !== primaryLength) {
+    primaryLength = 0; // give up on the optional attribute rather than write a wrong one
+    jpeg = rebuildJpeg(opts.still, parsed, upsertApp1(parsed.segments, XMP_HEADER, xmpToApp1(buildMotionPhotoXmp({ ...params, primaryLength }, existingXmp))));
+  }
+  return concat([jpeg, trailer]);
 }
