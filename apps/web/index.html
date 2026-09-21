@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PhotoShare · 라이브포토 ↔ 모션포토</title>
+    <meta name="description" content="아이폰 라이브포토와 갤럭시 모션포토를 움직임 그대로 서로 변환합니다. 파일은 브라우저 밖으로 나가지 않습니다." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='40' fill='none' stroke='%23f59e0b' stroke-width='10'/%3E%3Ccircle cx='50' cy='50' r='16' fill='%23f59e0b'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <div class="badge">iPhone ⇄ Galaxy</div>
+        <h1>라이브포토와 모션포토를<br />움직임 그대로 옮기세요</h1>
+        <p class="lead">
+          아이폰 <b>Live Photo</b>(HEIC/JPG + MOV)와 갤럭시·픽셀 <b>Motion Photo</b>(JPG)를 서로 변환합니다.
+          영상은 재인코딩하지 않고 그대로 옮기며, 촬영 정보(EXIF)와 키 프레임 시점도 유지됩니다.
+        </p>
+        <p class="privacy">🔒 모든 처리는 이 브라우저 안에서 끝납니다. 사진은 어디로도 업로드되지 않습니다.</p>
+      </header>
+
+      <section id="drop" class="drop" tabindex="0" role="button" aria-label="파일 선택 또는 끌어다 놓기">
+        <input id="file" type="file" multiple accept=".jpg,.jpeg,.heic,.heif,.mov,.mp4,image/jpeg,image/heic,image/heif,video/quicktime,video/mp4" hidden />
+        <div class="drop-inner">
+          <div class="drop-icon">📂</div>
+          <div class="drop-title">사진을 여기에 끌어다 놓거나 클릭해서 선택</div>
+          <ul class="drop-hints">
+            <li><b>갤럭시 → 아이폰</b>: 모션포토 JPG를 넣으면 라이브포토 한 쌍(JPG + MOV)이 나옵니다.</li>
+            <li><b>아이폰 → 갤럭시</b>: 같은 이름의 HEIC/JPG와 MOV를 함께 넣으면 모션포토 JPG가 나옵니다.</li>
+            <li>여러 장을 한 번에 넣어도 됩니다. 방향은 파일을 보고 자동으로 정합니다.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="results" class="results" hidden>
+        <div class="results-head">
+          <h2>결과</h2>
+          <div class="actions">
+            <button id="download-all" class="btn primary" disabled>전부 ZIP으로 저장</button>
+            <button id="clear" class="btn">지우기</button>
+          </div>
+        </div>
+        <ul id="list" class="list"></ul>
+      </section>
+
+      <section class="guide">
+        <h2>변환한 뒤 어떻게 넣나요?</h2>
+        <div class="guide-grid">
+          <article>
+            <h3>📱 아이폰에 라이브포토로 넣기</h3>
+            <p>iOS의 "사진에 저장"은 JPG와 MOV를 따로 저장하므로 <b>쌍으로 가져오는 경로</b>가 필요합니다. 아래 중 하나를 쓰세요.</p>
+            <ol>
+              <li><b>Google 포토</b>(가장 쉬움): PC에서 photos.google.com에 JPG+MOV를 함께 업로드 → 아이폰 Google 포토 앱에서 열면 재생되고, "기기에 저장"하면 사진 앱에 라이브포토로 들어갑니다.</li>
+              <li><b>iCloud 웹</b>: icloud.com/photos에서 업로드 버튼으로 JPG와 MOV를 <b>동시에</b> 선택하면 라이브포토로 합쳐집니다.</li>
+              <li><b>Mac 사진 앱</b>: 두 파일을 함께 가져오기(⌘I)하면 자동으로 쌍을 인식합니다. AirDrop으로 아이폰에 보내도 유지됩니다.</li>
+            </ol>
+          </article>
+          <article>
+            <h3>🤖 갤럭시에 모션포토로 넣기</h3>
+            <p>결과 JPG 한 장만 옮기면 됩니다. 별도 앱이 필요 없습니다.</p>
+            <ol>
+              <li>USB, Quick Share, 카카오톡 "원본"으로 전송 등 <b>파일이 변형되지 않는</b> 경로로 JPG를 옮깁니다.</li>
+              <li>갤러리에서 열면 "모션 포토" 배지가 붙고 길게 누르면 재생됩니다. Google 포토에서도 인식됩니다.</li>
+              <li>주의: 메신저의 일반 사진 전송은 다시 압축하며 영상이 사라집니다. 반드시 원본/파일 전송을 쓰세요.</li>
+            </ol>
+          </article>
+        </div>
+      </section>
+
+      <footer class="foot">
+        <p>오픈소스 · <a href="https://github.com/bincodin-ko/photoshare">GitHub</a> · CLI도 있습니다: <code>npx @photoshare/cli convert ./photos</code></p>
+      </footer>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
