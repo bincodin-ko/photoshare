@@ -1,0 +1,30 @@
+{
+  "name": "@photoshare/core",
+  "version": "0.1.0",
+  "description": "Zero-dependency parsers and writers for Apple Live Photos and Samsung/Google Motion Photos.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "exiftool-vendored.pl": "^13.0.0",
+    "ffmpeg-static": "^5.2.0"
+  },
+  "license": "MIT"
+}

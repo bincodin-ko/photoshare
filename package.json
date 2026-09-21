@@ -1,0 +1,22 @@
+{
+  "name": "photoshare-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Move Live Photos and Motion Photos between iPhone and Galaxy without losing the motion.",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "build": "pnpm -r --filter \"./packages/**\" run build",
+    "build:all": "pnpm -r run build",
+    "test": "pnpm --filter @photoshare/core run test",
+    "typecheck": "pnpm -r run typecheck",
+    "dev:web": "pnpm --filter @photoshare/web run dev"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "ffmpeg-static"
+    ]
+  }
+}
